@@ -18,7 +18,7 @@ use probe_rs::{
     coresight::access_ports::AccessPortError,
     flash::download::{download_file, download_file_with_progress_reporting, Format},
     flash::{FlashProgress, ProgressEvent},
-    probe::{DebugProbeError, DebugProbeType, MasterProbe},
+    probe::{DebugProbeError, DebugProbeType, Probe},
     session::Session,
     target::info::ChipInfo,
 };
@@ -240,7 +240,7 @@ fn main_try() -> Result<(), failure::Error> {
 
     println!("    {} {}", "Flashing".green().bold(), path_str);
 
-    let list = MasterProbe::list_all();
+    let list = Probe::list_all();
 
     let device = match opt.n {
         Some(index) => list.get(index).ok_or_else(|| {
@@ -258,7 +258,7 @@ fn main_try() -> Result<(), failure::Error> {
         }
     };
 
-    let mut probe = MasterProbe::from_probe_info(&device)?;
+    let mut probe = Probe::from_probe_info(&device)?;
 
     if opt.nrf_recover {
         match device.probe_type {
