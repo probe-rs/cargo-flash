@@ -18,7 +18,7 @@ use probe_rs::{
     coresight::access_ports::AccessPortError,
     flash::download::{download_file, download_file_with_progress_reporting, Format},
     flash::{FlashProgress, ProgressEvent},
-    probe::{DebugProbeError, Probe},
+    DebugProbeError, Probe,
 };
 
 #[derive(Debug, StructOpt)]
