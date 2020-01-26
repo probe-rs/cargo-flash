@@ -20,7 +20,7 @@ use probe_rs::{
     flash::{FlashProgress, ProgressEvent},
     probe::{DebugProbeError, DebugProbeType, Probe},
     session::Session,
-    target::info::ChipInfo,
+    config::chip_info::ChipInfo,
 };
 
 #[derive(Debug, StructOpt)]
@@ -261,20 +261,26 @@ fn main_try() -> Result<(), failure::Error> {
     let mut probe = Probe::from_probe_info(&device)?;
 
     if opt.nrf_recover {
-        match device.probe_type {
-            DebugProbeType::DAPLink => {
-                probe.nrf_recover()?;
-            }
-            DebugProbeType::STLink => {
-                return Err(format_err!("It isn't possible to recover with a ST-Link"));
-            }
-        };
+        // TODO:
+        // match device.probe_type {
+        //     DebugProbeType::DAPLink => {
+        //         probe.nrf_recover()?;
+        //     }
+        //     DebugProbeType::STLink => {
+        //         return Err(format_err!("It isn't possible to recover with a ST-Link"));
+        //     }
+        // };
+        eprintln!("The nrf-recover option is currently disabled for stability reasons.");
+        std::process::exit(1);
     }
 
     let strategy = if let Some(identifier) = opt.chip.clone() {
         SelectionStrategy::TargetIdentifier(identifier.into())
     } else {
-        SelectionStrategy::ChipInfo(ChipInfo::read_from_rom_table(&mut probe)?)
+        eprintln!("Autodetection of the target is currently disabled for stability reasons.");
+        std::process::exit(1);
+        // TODO:
+        // SelectionStrategy::ChipInfo(ChipInfo::read_from_rom_table(&mut probe)?)
     };
 
     let mut registry = Registry::from_builtin_families();
@@ -283,8 +289,7 @@ fn main_try() -> Result<(), failure::Error> {
     }
 
     let target = registry.get_target(strategy)?;
-
-    let mut session = Session::new(target, probe);
+    let session = probe.attach(target, None)?;
 
     // Start timer.
     let instant = Instant::now();
@@ -353,7 +358,7 @@ fn main_try() -> Result<(), failure::Error> {
             });
 
             download_file_with_progress_reporting(
-                &mut session,
+                session.clone(),
                 std::path::Path::new(&path_str.to_string().as_str()),
                 Format::Elf,
                 &mm,
@@ -365,7 +370,7 @@ fn main_try() -> Result<(), failure::Error> {
             let _ = progress_thread_handle.join();
         } else {
             download_file(
-                &mut session,
+                session.clone(),
                 std::path::Path::new(&path_str.to_string().as_str()),
                 Format::Elf,
                 &mm,
@@ -383,9 +388,9 @@ fn main_try() -> Result<(), failure::Error> {
     }
 
     if opt.reset_halt {
-        session.target.core.reset_and_halt(&mut session.probe)?;
+        session.attach_to_core(0)?.reset_and_halt()?;
     } else {
-        session.target.core.reset(&mut session.probe)?;
+        session.attach_to_core(0)?.reset()?;
     }
 
     if opt.gdb {
