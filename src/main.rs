@@ -15,7 +15,7 @@ use structopt::StructOpt;
 
 use probe_rs::{
     config::registry::{Registry, SelectionStrategy},
-    coresight::access_ports::AccessPortError,
+    architecture::arm::ap::AccessPortError,
     flash::download::{download_file, download_file_with_progress_reporting, Format},
     flash::{FlashProgress, ProgressEvent},
     DebugProbeError, Probe,
