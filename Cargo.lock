@@ -169,7 +169,7 @@ dependencies = [
  "indicatif 0.14.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
- "probe-rs 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "probe-rs 0.5.0 (git+https://github.com/probe-rs/probe-rs?branch=fix-reset-issues)",
  "structopt 0.3.11 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -522,7 +522,7 @@ dependencies = [
  "gdb-protocol 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "memchr 2.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "probe-rs 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "probe-rs 0.5.0 (git+https://github.com/probe-rs/probe-rs?branch=fix-reset-issues)",
  "recap 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.104 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -900,7 +900,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "probe-rs"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+source = "git+https://github.com/probe-rs/probe-rs?branch=fix-reset-issues#6edc813af26da3fd112102e9df96deb10de97d65"
 dependencies = [
  "bitfield 0.13.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "capstone 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -917,7 +917,7 @@ dependencies = [
  "maplit 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "num-traits 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "object 0.17.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "probe-rs-t2rust 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "probe-rs-t2rust 0.5.0 (git+https://github.com/probe-rs/probe-rs?branch=fix-reset-issues)",
  "rusb 0.5.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "scroll 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.104 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -928,7 +928,7 @@ dependencies = [
 [[package]]
 name = "probe-rs-t2rust"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+source = "git+https://github.com/probe-rs/probe-rs?branch=fix-reset-issues#6edc813af26da3fd112102e9df96deb10de97d65"
 dependencies = [
  "base64 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "proc-macro2 1.0.9 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1553,8 +1553,8 @@ dependencies = [
 "checksum pin-utils 0.1.0-alpha.4 (registry+https://github.com/rust-lang/crates.io-index)" = "5894c618ce612a3fa23881b152b608bafb8c56cfc22f434a3ba3120b40f7b587"
 "checksum pkg-config 0.3.17 (registry+https://github.com/rust-lang/crates.io-index)" = "05da548ad6865900e60eaba7f589cc0783590a92e940c26953ff81ddbab2d677"
 "checksum plain 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)" = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
-"checksum probe-rs 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)" = "bc01cc7f67b17be7a91e20e0bc10cdb3be20a99e2338a2ac37c2055ead7c4aa1"
-"checksum probe-rs-t2rust 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)" = "0f868c576644e8cbdd7d3ddfdb5b158fe4a0e69f667d92adb15a8a5630a8dd49"
+"checksum probe-rs 0.5.0 (git+https://github.com/probe-rs/probe-rs?branch=fix-reset-issues)" = "<none>"
+"checksum probe-rs-t2rust 0.5.0 (git+https://github.com/probe-rs/probe-rs?branch=fix-reset-issues)" = "<none>"
 "checksum proc-macro-error 0.4.10 (registry+https://github.com/rust-lang/crates.io-index)" = "8a857f7c61b149c868eb7e40311b48502fcc924744fb73191962748643336568"
 "checksum proc-macro-error-attr 0.4.10 (registry+https://github.com/rust-lang/crates.io-index)" = "075d00534b62f176b55a48b68319be2f3fc05616d68ecd2bcb66bac0a49170e1"
 "checksum proc-macro-hack 0.5.11 (registry+https://github.com/rust-lang/crates.io-index)" = "ecd45702f76d6d3c75a80564378ae228a85f0b59d2f3ed43c91b4a69eb2ebfc5"
