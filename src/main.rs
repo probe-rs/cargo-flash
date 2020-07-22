@@ -7,6 +7,7 @@ use cargo_toml::Manifest;
 use colored::*;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::{
+    borrow::Borrow,
     env,
     io::Write,
     path::{Path, PathBuf},
@@ -18,10 +19,11 @@ use structopt::StructOpt;
 
 use serde::Deserialize;
 
+use logging::{JsonOutput, TerminalOutputter};
 use probe_rs::{
     config::TargetSelector,
     flashing::{download_file_with_options, DownloadOptions, FlashProgress, Format, ProgressEvent},
-    DebugProbeError, DebugProbeSelector, Probe, WireProtocol,
+    DebugProbeError, DebugProbeSelector, Probe, Session, WireProtocol,
 };
 
 #[derive(Debug, StructOpt)]
@@ -63,6 +65,13 @@ struct Opt {
         help = "Use this flag to automatically spawn a GDB server instance after flashing the target."
     )]
     gdb: bool,
+    #[structopt(
+        long,
+        help = "Use this flag to prevent the automatic build of the Cargo project."
+    )]
+    no_build: bool,
+    #[structopt(long)]
+    dry_run: bool,
     #[structopt(
         name = "no-download",
         long = "no-download",
@@ -134,6 +143,8 @@ struct Opt {
     all_features: bool,
     #[structopt(long)]
     features: Vec<String>,
+    #[structopt(long)]
+    message_format: Option<String>,
 }
 
 const ARGUMENTS_TO_REMOVE: &[&str] = &[
@@ -194,9 +205,10 @@ fn main_try() -> Result<()> {
     let mut args: Vec<_> = args.collect();
 
     // Get commandline options.
-    let opt = Opt::from_iter(&args);
+    let mut opt = Opt::from_iter(&args);
+    let json_output = opt.message_format.as_ref().map(|s| s.borrow()) == Some("json");
 
-    logging::init(opt.log);
+    let outputter = logging::TerminalOutputter::init(opt.log, json_output);
 
     // Load cargo manifest if available and parse out meta object
     let meta = match std::fs::read("Cargo.toml") {
@@ -209,21 +221,21 @@ fn main_try() -> Result<()> {
 
     // If someone wants to list the connected probes, just do that and exit.
     if opt.list_probes {
-        list_connected_devices()?;
+        list_connected_devices(&outputter)?;
         return Ok(());
     }
 
     // Make sure we load the config given in the cli parameters.
-    if let Some(cdp) = opt.chip_description_path {
-        probe_rs::config::registry::add_target_from_yaml(&Path::new(&cdp))?;
+    if let Some(ref cdp) = opt.chip_description_path {
+        probe_rs::config::registry::add_target_from_yaml(&Path::new(cdp))?;
     }
 
     let chip = if opt.list_chips {
-        print_families()?;
+        print_families(&outputter)?;
         return Ok(());
     } else {
         // First use command line, then manifest, then default to auto
-        match (opt.chip, meta.map(|m| m.chip).flatten()) {
+        match (&opt.chip, meta.map(|m| m.chip).flatten()) {
             (Some(c), _) => c.into(),
             (_, Some(c)) => c.into(),
             _ => TargetSelector::Auto,
@@ -236,23 +248,30 @@ fn main_try() -> Result<()> {
     remove_arguments(ARGUMENTS_TO_REMOVE, &mut args);
 
     // Change the work dir if the user asked to do so
-    if let Some(work_dir) = opt.work_dir {
-        std::env::set_current_dir(work_dir).context("failed to change the working directory")?;
+    if let Some(ref work_dir) = opt.work_dir {
+        std::env::set_current_dir(work_dir).context(format!(
+            "Failed to change the working directory to '{}'",
+            work_dir
+        ))?;
     }
 
-    let path: PathBuf = if let Some(path) = opt.elf {
+    let path: PathBuf = if let Some(ref path) = opt.elf {
         path.into()
     } else {
-        let status = Command::new("cargo")
-            .arg("build")
-            .args(args)
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .spawn()?
-            .wait()?;
+        if opt.no_build {
+            log::info!("Skipping build, '--no-build' flag is set");
+        } else {
+            let status = Command::new("cargo")
+                .arg("build")
+                .args(args)
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .spawn()?
+                .wait()?;
 
-        if !status.success() {
-            handle_failed_command(status)
+            if !status.success() {
+                handle_failed_command(status)
+            }
         }
 
         // Try and get the cargo project information.
@@ -286,16 +305,12 @@ fn main_try() -> Result<()> {
             .map_err(|e| anyhow!("Couldn't get artifact path: {}", e))?
     };
 
-    logging::println(format!(
-        "    {} {}",
-        "Flashing".green().bold(),
-        path.display()
-    ));
+    outputter.println_formatted(path.display().to_string(), Some("Flashing"));
 
     let list = Probe::list_all();
 
     // If we got a probe selector as an argument, open the probe matching the selector if possible.
-    let mut probe = match opt.probe_selector {
+    let mut probe = match opt.probe_selector.take() {
         Some(selector) => Probe::open(selector)?,
         None => {
             // Only automatically select a probe if there is only
@@ -369,132 +384,10 @@ fn main_try() -> Result<()> {
     let instant = Instant::now();
 
     if !opt.no_download {
-        if !opt.disable_progressbars {
-            // Create progress bars.
-            let multi_progress = MultiProgress::new();
-            let style = ProgressStyle::default_bar()
-                    .tick_chars("⠁⠁⠉⠙⠚⠒⠂⠂⠒⠲⠴⠤⠄⠄⠤⠠⠠⠤⠦⠖⠒⠐⠐⠒⠓⠋⠉⠈⠈✔")
-                    .progress_chars("##-")
-                    .template("{msg:.green.bold} {spinner} [{elapsed_precise}] [{wide_bar}] {bytes:>8}/{total_bytes:>8} @ {bytes_per_sec:>10} (eta {eta:3})");
-
-            // Create a new progress bar for the fill progress if filling is enabled.
-            let fill_progress = if opt.restore_unwritten {
-                let fill_progress = Arc::new(multi_progress.add(ProgressBar::new(0)));
-                fill_progress.set_style(style.clone());
-                fill_progress.set_message("     Reading flash  ");
-                Some(fill_progress)
-            } else {
-                None
-            };
-
-            // Create a new progress bar for the erase progress.
-            let erase_progress = Arc::new(multi_progress.add(ProgressBar::new(0)));
-            {
-                logging::set_progress_bar(erase_progress.clone());
-            }
-            erase_progress.set_style(style.clone());
-            erase_progress.set_message("     Erasing sectors");
-
-            // Create a new progress bar for the program progress.
-            let program_progress = multi_progress.add(ProgressBar::new(0));
-            program_progress.set_style(style);
-            program_progress.set_message(" Programming pages  ");
-
-            // Register callback to update the progress.
-            let flash_layout_output_path = opt.flash_layout_output_path.clone();
-            let progress = FlashProgress::new(move |event| {
-                use ProgressEvent::*;
-                match event {
-                    Initialized { flash_layout } => {
-                        let total_page_size: u32 =
-                            flash_layout.pages().iter().map(|s| s.size()).sum();
-                        let total_sector_size: u32 =
-                            flash_layout.sectors().iter().map(|s| s.size()).sum();
-                        let total_fill_size: u32 =
-                            flash_layout.fills().iter().map(|s| s.size()).sum();
-                        if let Some(fp) = fill_progress.as_ref() {
-                            fp.set_length(total_fill_size as u64)
-                        }
-                        erase_progress.set_length(total_sector_size as u64);
-                        program_progress.set_length(total_page_size as u64);
-                        let visualizer = flash_layout.visualize();
-                        flash_layout_output_path
-                            .as_ref()
-                            .map(|path| visualizer.write_svg(path));
-                    }
-                    StartedProgramming => {
-                        program_progress.enable_steady_tick(100);
-                        program_progress.reset_elapsed();
-                    }
-                    StartedErasing => {
-                        erase_progress.enable_steady_tick(100);
-                        erase_progress.reset_elapsed();
-                    }
-                    StartedFilling => {
-                        if let Some(fp) = fill_progress.as_ref() {
-                            fp.enable_steady_tick(100)
-                        };
-                        if let Some(fp) = fill_progress.as_ref() {
-                            fp.reset_elapsed()
-                        };
-                    }
-                    PageProgrammed { size, .. } => {
-                        program_progress.inc(size as u64);
-                    }
-                    SectorErased { size, .. } => {
-                        erase_progress.inc(size as u64);
-                    }
-                    PageFilled { size, .. } => {
-                        if let Some(fp) = fill_progress.as_ref() {
-                            fp.inc(size as u64)
-                        };
-                    }
-                    FailedErasing => {
-                        erase_progress.abandon();
-                        program_progress.abandon();
-                    }
-                    FinishedErasing => {
-                        erase_progress.finish();
-                    }
-                    FailedProgramming => {
-                        program_progress.abandon();
-                    }
-                    FinishedProgramming => {
-                        program_progress.finish();
-                    }
-                    FailedFilling => {
-                        if let Some(fp) = fill_progress.as_ref() {
-                            fp.abandon()
-                        };
-                    }
-                    FinishedFilling => {
-                        if let Some(fp) = fill_progress.as_ref() {
-                            fp.finish()
-                        };
-                    }
-                }
-            });
-
-            // Make the multi progresses print.
-            // indicatif requires this in a separate thread as this join is a blocking op,
-            // but is required for printing multiprogress.
-            let progress_thread_handle = std::thread::spawn(move || {
-                multi_progress.join().unwrap();
-            });
-
-            download_file_with_options(
-                &mut session,
-                path.as_path(),
-                Format::Elf,
-                DownloadOptions {
-                    progress: Some(&progress),
-                    keep_unwritten_bytes: opt.restore_unwritten,
-                },
-            )
-            .with_context(|| format!("failed to flash {}", path.display()))?;
-
-            // We don't care if we cannot join this thread.
-            let _ = progress_thread_handle.join();
+        if opt.message_format.as_ref().map(|s| s.borrow()) == Some("json") {
+            download_with_json_progress(&path, &mut session, &opt)?;
+        } else if !opt.disable_progressbars {
+            download_with_progress(&path, &mut session, &opt)?;
         } else {
             download_file_with_options(
                 &mut session,
@@ -510,11 +403,10 @@ fn main_try() -> Result<()> {
 
         // Stop timer.
         let elapsed = instant.elapsed();
-        logging::println(format!(
-            "    {} in {}s",
-            "Finished".green().bold(),
-            elapsed.as_millis() as f32 / 1000.0,
-        ));
+        outputter.println_formatted(
+            format!("in {} s", elapsed.as_millis() as f32 / 1000.0),
+            Some("Finished"),
+        );
     }
 
     {
@@ -532,26 +424,26 @@ fn main_try() -> Result<()> {
             .gdb_connection_string
             .or_else(|| Some("localhost:1337".to_string()));
         // This next unwrap will always resolve as the connection string is always Some(T).
-        logging::println(format!(
+        outputter.println(format!(
             "Firing up GDB stub at {}",
-            gdb_connection_string.as_ref().unwrap(),
+            gdb_connection_string.as_ref().unwrap()
         ));
         if let Err(e) = probe_rs_gdb_server::run(gdb_connection_string, session) {
-            logging::eprintln("During the execution of GDB an error was encountered:");
-            logging::eprintln(format!("{:?}", e));
+            outputter.eprintln("During the execution of GDB an error was encountered:");
+            outputter.eprintln(format!("{:?}", e));
         }
     }
 
     Ok(())
 }
 
-fn print_families() -> Result<()> {
-    logging::println("Available chips:");
+fn print_families(outputter: &TerminalOutputter) -> Result<()> {
+    outputter.println("Available chips:");
     for family in probe_rs::config::registry::families().context("failed to read families")? {
-        logging::println(&family.name);
-        logging::println("    Variants:");
+        outputter.println(&family.name);
+        outputter.println("    Variants:");
         for variant in family.variants() {
-            logging::println(format!("        {}", variant.name));
+            outputter.println(format!("        {}", variant.name));
         }
     }
     Ok(())
@@ -666,18 +558,169 @@ fn remove_arguments_test() {
 }
 
 /// Lists all connected devices
-fn list_connected_devices() -> Result<(), DebugProbeError> {
+fn list_connected_devices(outputter: &TerminalOutputter) -> Result<(), DebugProbeError> {
     let probes = Probe::list_all();
 
     if !probes.is_empty() {
-        println!("The following devices were found:");
+        outputter.println("The following devices were found:");
         probes
             .iter()
             .enumerate()
-            .for_each(|(num, link)| println!("[{}]: {:?}", num, link));
+            .for_each(|(num, link)| outputter.println(format!("[{}]: {:?}", num, link)));
     } else {
         println!("No devices were found.");
     }
+
+    Ok(())
+}
+
+fn download_with_progress(path: &Path, session: &mut Session, opt: &Opt) -> Result<()> {
+    // Create progress bars.
+    let multi_progress = MultiProgress::new();
+    let style = ProgressStyle::default_bar()
+                    .tick_chars("⠁⠁⠉⠙⠚⠒⠂⠂⠒⠲⠴⠤⠄⠄⠤⠠⠠⠤⠦⠖⠒⠐⠐⠒⠓⠋⠉⠈⠈✔")
+                    .progress_chars("##-")
+                    .template("{msg:.green.bold} {spinner} [{elapsed_precise}] [{wide_bar}] {bytes:>8}/{total_bytes:>8} @ {bytes_per_sec:>10} (eta {eta:3})");
+
+    // Create a new progress bar for the fill progress if filling is enabled.
+    let fill_progress = if opt.restore_unwritten {
+        let fill_progress = Arc::new(multi_progress.add(ProgressBar::new(0)));
+        fill_progress.set_style(style.clone());
+        fill_progress.set_message("     Reading flash  ");
+        Some(fill_progress)
+    } else {
+        None
+    };
+
+    // Create a new progress bar for the erase progress.
+    let erase_progress = Arc::new(multi_progress.add(ProgressBar::new(0)));
+    {
+        logging::set_progress_bar(erase_progress.clone());
+    }
+    erase_progress.set_style(style.clone());
+    erase_progress.set_message("     Erasing sectors");
+
+    // Create a new progress bar for the program progress.
+    let program_progress = multi_progress.add(ProgressBar::new(0));
+    program_progress.set_style(style);
+    program_progress.set_message(" Programming pages  ");
+
+    // Register callback to update the progress.
+    let flash_layout_output_path = opt.flash_layout_output_path.clone();
+    let progress = FlashProgress::new(move |event| {
+        use ProgressEvent::*;
+        match event {
+            Initialized { flash_layout } => {
+                let total_page_size: u32 = flash_layout.pages().iter().map(|s| s.size()).sum();
+                let total_sector_size: u32 = flash_layout.sectors().iter().map(|s| s.size()).sum();
+                let total_fill_size: u32 = flash_layout.fills().iter().map(|s| s.size()).sum();
+                if let Some(fp) = fill_progress.as_ref() {
+                    fp.set_length(total_fill_size as u64)
+                }
+                erase_progress.set_length(total_sector_size as u64);
+                program_progress.set_length(total_page_size as u64);
+                let visualizer = flash_layout.visualize();
+                flash_layout_output_path
+                    .as_ref()
+                    .map(|path| visualizer.write_svg(path));
+            }
+            StartedProgramming => {
+                program_progress.enable_steady_tick(100);
+                program_progress.reset_elapsed();
+            }
+            StartedErasing => {
+                erase_progress.enable_steady_tick(100);
+                erase_progress.reset_elapsed();
+            }
+            StartedFilling => {
+                if let Some(fp) = fill_progress.as_ref() {
+                    fp.enable_steady_tick(100)
+                };
+                if let Some(fp) = fill_progress.as_ref() {
+                    fp.reset_elapsed()
+                };
+            }
+            PageProgrammed { size, .. } => {
+                program_progress.inc(size as u64);
+            }
+            SectorErased { size, .. } => {
+                erase_progress.inc(size as u64);
+            }
+            PageFilled { size, .. } => {
+                if let Some(fp) = fill_progress.as_ref() {
+                    fp.inc(size as u64)
+                };
+            }
+            FailedErasing => {
+                erase_progress.abandon();
+                program_progress.abandon();
+            }
+            FinishedErasing => {
+                erase_progress.finish();
+            }
+            FailedProgramming => {
+                program_progress.abandon();
+            }
+            FinishedProgramming => {
+                program_progress.finish();
+            }
+            FailedFilling => {
+                if let Some(fp) = fill_progress.as_ref() {
+                    fp.abandon()
+                };
+            }
+            FinishedFilling => {
+                if let Some(fp) = fill_progress.as_ref() {
+                    fp.finish()
+                };
+            }
+        }
+    });
+
+    // Make the multi progresses print.
+    // indicatif requires this in a separate thread as this join is a blocking op,
+    // but is required for printing multiprogress.
+    let progress_thread_handle = std::thread::spawn(move || {
+        multi_progress.join().unwrap();
+    });
+
+    download_file_with_options(
+        session,
+        path,
+        Format::Elf,
+        DownloadOptions {
+            progress: Some(&progress),
+            keep_unwritten_bytes: opt.restore_unwritten,
+        },
+    )
+    .with_context(|| format!("failed to flash {}", path.display()))?;
+
+    // We don't care if we cannot join this thread.
+    let _ = progress_thread_handle.join();
+
+    Ok(())
+}
+
+fn download_with_json_progress(path: &Path, session: &mut Session, opt: &Opt) -> Result<()> {
+    let flash_progress = FlashProgress::new(|event| {
+        let json_out = JsonOutput::from(event);
+
+        println!(
+            "{}",
+            serde_json::to_string(&json_out)
+                .expect("Serde JSON serialization failed. This is a bug.")
+        );
+    });
+
+    download_file_with_options(
+        session,
+        path,
+        Format::Elf,
+        DownloadOptions {
+            progress: Some(&flash_progress),
+            keep_unwritten_bytes: opt.restore_unwritten,
+        },
+    )?;
 
     Ok(())
 }
