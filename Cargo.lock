@@ -504,7 +504,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 [[package]]
 name = "probe-rs"
 version = "0.8.0"
-source = "git+https://github.com/probe-rs/probe-rs#abb611591d11d4a25bb05ed1dcdf9e2e53f5d89a"
+source = "git+https://github.com/probe-rs/probe-rs#bc411431ea1b672f4189a42e90f855d778b674ce"
 dependencies = [
  "anyhow",
  "base64",
@@ -534,7 +534,7 @@ dependencies = [
 [[package]]
 name = "probe-rs-cli-util"
 version = "0.8.0"
-source = "git+https://github.com/probe-rs/probe-rs#abb611591d11d4a25bb05ed1dcdf9e2e53f5d89a"
+source = "git+https://github.com/probe-rs/probe-rs#bc411431ea1b672f4189a42e90f855d778b674ce"
 dependencies = [
  "anyhow",
  "cargo_metadata",
@@ -548,7 +548,7 @@ dependencies = [
 [[package]]
 name = "probe-rs-t2rust"
 version = "0.6.0"
-source = "git+https://github.com/probe-rs/probe-rs#abb611591d11d4a25bb05ed1dcdf9e2e53f5d89a"
+source = "git+https://github.com/probe-rs/probe-rs#bc411431ea1b672f4189a42e90f855d778b674ce"
 dependencies = [
  "base64",
  "proc-macro2",
