@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Context};
 use colored::*;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::{
@@ -169,13 +169,20 @@ fn main() {
             //
             // We ignore the errors, not much we can do anyway.
 
+            let error = e.get_error();
+
             let mut stderr = std::io::stderr();
-            let _ = writeln!(stderr, "       {} {:?}", "Error".red().bold(), e);
+            let _ = writeln!(stderr, "       {} {:?}", "Error".red().bold(), error);
             let _ = stderr.flush();
 
             #[cfg(feature = "sentry")]
-            if ask_to_log_crash() {
-                capture_anyhow(&METADATA.lock().unwrap(), &e)
+            match e {
+                ErrorStatus::Unexpected(e) => {
+                    if e.source().is_some() && ask_to_log_crash() {
+                        capture_anyhow(&METADATA.lock().unwrap(), &e)
+                    }
+                }
+                _ => (),
             }
             #[cfg(not(feature = "sentry"))]
             log::info!("{:#?}", &METADATA.lock().unwrap());
@@ -185,7 +192,42 @@ fn main() {
     }
 }
 
-fn main_try() -> Result<()> {
+enum ErrorStatus {
+    Expected(anyhow::Error),
+    Unexpected(anyhow::Error),
+}
+
+impl ErrorStatus {
+    fn get_error(&self) -> &anyhow::Error {
+        match self {
+            ErrorStatus::Expected(e) => e,
+            ErrorStatus::Unexpected(e) => e,
+        }
+    }
+}
+
+trait ToErrorStatus<T, E>
+where
+    E: Into<anyhow::Error>,
+{
+    fn expected(self) -> Result<T, ErrorStatus>;
+    fn unexpected(self) -> Result<T, ErrorStatus>;
+}
+
+impl<T, E> ToErrorStatus<T, E> for Result<T, E>
+where
+    E: Into<anyhow::Error>,
+{
+    fn expected(self) -> Result<T, ErrorStatus> {
+        self.map_err(|e| ErrorStatus::Expected(e.into()))
+    }
+
+    fn unexpected(self) -> Result<T, ErrorStatus> {
+        self.map_err(|e| ErrorStatus::Unexpected(e.into()))
+    }
+}
+
+fn main_try() -> Result<(), ErrorStatus> {
     let mut args = std::env::args();
 
     // When called by Cargo, the first argument after the binary name will be `flash`. If that's the
@@ -205,7 +247,7 @@ fn main_try() -> Result<()> {
 
     // If someone wants to list the connected probes, just do that and exit.
     if opt.list_probes {
-        list_connected_devices()?;
+        list_connected_devices().unexpected()?;
         return Ok(());
     }
 
@@ -214,11 +256,11 @@ fn main_try() -> Result<()> {
 
     // Make sure we load the config given in the cli parameters.
     if let Some(cdp) = opt.chip_description_path {
-        probe_rs::config::registry::add_target_from_yaml(&Path::new(&cdp))?;
+        probe_rs::config::registry::add_target_from_yaml(&Path::new(&cdp)).unexpected()?;
     }
 
     let chip = if opt.list_chips {
-        print_families()?;
+        print_families().unexpected()?;
         return Ok(());
     } else {
         // First use command line, then manifest, then default to auto
@@ -236,13 +278,15 @@ fn main_try() -> Result<()> {
     argument_handling::remove_arguments(ARGUMENTS_TO_REMOVE, &mut args);
 
     // Change the work dir if the user asked to do so
-    std::env::set_current_dir(&work_dir).context("failed to change the working directory")?;
+    std::env::set_current_dir(&work_dir)
+        .context("failed to change the working directory")
+        .expected()?;
 
     let path: PathBuf = if let Some(path) = opt.elf {
         path.into()
     } else {
         // Build the project, and extract the path of the built artifact.
-        build_artifact(&work_dir, &args)?
+        build_artifact(&work_dir, &args).unexpected()?
     };
 
     logging::println(format!(
@@ -255,12 +299,12 @@ fn main_try() -> Result<()> {
 
     // If we got a probe selector as an argument, open the probe matching the selector if possible.
     let mut probe = match opt.probe_selector {
-        Some(selector) => Probe::open(selector)?,
+        Some(selector) => Probe::open(selector).unexpected()?,
         None => {
             // Only automatically select a probe if there is only
             // a single probe detected.
             if list.len() > 1 {
-                return Err(anyhow!("More than a single probe detected. Use the --probe argument to select which probe to use."));
+                return Err(anyhow!("More than a single probe detected. Use the --probe argument to select which probe to use.")).expected();
             }
 
             Probe::open(
@@ -269,17 +313,23 @@ fn main_try() -> Result<()> {
                         METADATA.lock().unwrap().probe = Some(format!("{:?}", info.probe_type));
                         info
                     })
-                    .ok_or_else(|| anyhow!("No supported probe was found"))?,
-            )?
+                    .ok_or_else(|| anyhow!("No supported probe was found"))
+                    .expected()?,
+            )
+            .unexpected()?
         }
     };
 
     probe
         .select_protocol(opt.protocol)
-        .context("failed to select protocol")?;
+        .context("failed to select protocol")
+        .unexpected()?;
 
     let protocol_speed = if let Some(speed) = opt.speed {
-        let actual_speed = probe.set_speed(speed).context("failed to set speed")?;
+        let actual_speed = probe
+            .set_speed(speed)
+            .context("failed to set speed")
+            .unexpected()?;
 
         if actual_speed < speed {
             log::warn!(
@@ -301,18 +351,28 @@ fn main_try() -> Result<()> {
     let mut session = if opt.connect_under_reset {
         probe
             .attach_under_reset(chip)
-            .context("failed attaching to target")?
+            .context("failed attaching to target")
+            .unexpected()?
     } else {
         let potential_session = probe.attach(chip);
         match potential_session {
             Ok(session) => session,
-            Err(session) => {
+            Err(error) => {
                 log::info!("The target seems to be unable to be attached to.");
                 log::info!(
                     "A hard reset during attaching might help. This will reset the entire chip."
                 );
                 log::info!("Run with `--connect-under-reset` to enable this feature.");
-                return Err(session).context("failed attaching to target");
+                match error {
+                    probe_rs::Error::ChipNotFound(_) => {
+                        return Err(error).context("failed attaching to target").expected();
+                    }
+                    _ => {
+                        return Err(error)
+                            .context("failed attaching to target")
+                            .unexpected();
+                    }
+                }
             }
         }
     };
@@ -440,7 +500,8 @@ fn main_try() -> Result<()> {
                 keep_unwritten_bytes: opt.restore_unwritten,
             },
         )
-        .with_context(|| format!("failed to flash {}", path.display()))?;
+        .with_context(|| format!("failed to flash {}", path.display()))
+        .unexpected()?;
 
         // We don't care if we cannot join this thread.
         let _ = progress_thread_handle.join();
@@ -454,7 +515,8 @@ fn main_try() -> Result<()> {
                 keep_unwritten_bytes: opt.restore_unwritten,
             },
         )
-        .with_context(|| format!("failed to flash {}", path.display()))?;
+        .with_context(|| format!("failed to flash {}", path.display()))
+        .unexpected()?;
     }
 
     // Stop timer.
@@ -466,19 +528,20 @@ fn main_try() -> Result<()> {
     ));
 
     {
-        let mut core = session.core(0)?;
+        let mut core = session.core(0).unexpected()?;
         if opt.reset_halt {
             core.reset_and_halt(std::time::Duration::from_millis(500))
-                .context("failed to reset and halt")?;
+                .context("failed to reset and halt")
+                .unexpected()?;
         } else {
-            core.reset().context("failed to reset")?;
+            core.reset().context("failed to reset").unexpected()?;
         }
     }
 
     Ok(())
 }
 
-fn print_families() -> Result<()> {
+fn print_families() -> anyhow::Result<()> {
     logging::println("Available chips:");
     for family in probe_rs::config::registry::families().context("failed to read families")? {
         logging::println(&family.name);

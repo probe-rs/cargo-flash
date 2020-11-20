@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [0.10.2]
+
+- Fixed a bug where properly handled errors would try to log to Sentry too.
+
 ## [0.10.0]
 
 ### Added
