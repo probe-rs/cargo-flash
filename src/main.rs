@@ -101,6 +101,12 @@ struct Opt {
     )]
     elf: Option<String>,
     #[structopt(
+        name = "hex file",
+        long = "hex",
+        help = "The path to the IHEX file to be flashed."
+    )]
+    hex: Option<String>,
+    #[structopt(
         name = "directory",
         long = "work-dir",
         help = "The work directory from which cargo-flash should operate from."
@@ -238,11 +244,15 @@ fn main_try() -> Result<()> {
     // Change the work dir if the user asked to do so
     std::env::set_current_dir(&work_dir).context("failed to change the working directory")?;
 
-    let path: PathBuf = if let Some(path) = opt.elf {
-        path.into()
+    // priority becomes hex, elf, then build fresh
+    // TODO: probably possible to restrict with structop somehow
+    let (path, format) = if let Some(path) = opt.hex {
+        (path.into(), Format::Hex)
+    } else if let Some(path) = opt.elf {
+        (path.into(), Format::Elf)
     } else {
         // Build the project, and extract the path of the built artifact.
-        build_artifact(&work_dir, &args)?
+        (build_artifact(&work_dir, &args)?, Format::Elf)
     };
 
     logging::println(format!(
@@ -434,7 +444,7 @@ fn main_try() -> Result<()> {
         download_file_with_options(
             &mut session,
             path.as_path(),
-            Format::Elf,
+            format,
             DownloadOptions {
                 progress: Some(&progress),
                 keep_unwritten_bytes: opt.restore_unwritten,
@@ -448,7 +458,7 @@ fn main_try() -> Result<()> {
         download_file_with_options(
             &mut session,
             path.as_path(),
-            Format::Elf,
+            format,
             DownloadOptions {
                 progress: None,
                 keep_unwritten_bytes: opt.restore_unwritten,
